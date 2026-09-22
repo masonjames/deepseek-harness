@@ -1,4 +1,5 @@
 import { defineConfig } from 'tsdown'
+import { buildWorkspaces } from './scripts/build-workspaces.ts'
 import { typertPlugin } from './packages/typert/generator/lib/types/tsdown-plugin.js'
 
 function isBuildFaceClient(value: unknown): boolean {
@@ -16,9 +17,7 @@ function isBuildFaceClient(value: unknown): boolean {
 export default defineConfig(({ env }) => {
   const client = isBuildFaceClient(env?.DSH_BUILD_FACE)
   return {
-    workspace: client
-      ? ['vendor/*', 'packages/*/*', 'apps/cli']
-      : ['vendor/*', 'packages/*/*', 'apps/cli', 'apps/desktop', 'apps/desktop-host'],
+    workspace: buildWorkspaces(import.meta.dirname, client),
     entry: client ? '' : ['lib/types/{index,invariant,startup}.js'],
     outDir: 'lib',
     format: ['esm'],
