@@ -126,6 +126,7 @@ describe('mcp-client plugin module exports', () => {
       command: 'echo',
     } as never)
     expect(omitted.reconnect).toEqual({ enabled: true, initialDelayMs: 500, maxDelayMs: 30_000, maxAttempts: 10 })
+    expect(omitted.startupMode).toBe('blocking')
 
     const partial = ConfigSchema({
       transport: 'stdio',
@@ -218,7 +219,44 @@ describe('apply (plugin lifecycle)', () => {
     expect(ctx.tools.get('mcp__srv__remote')).toBeDefined()
   })
 
-  it('closes the transport when its owner unloads during initial connection', async () => {
+  it.each(['stdio', 'streamable-http'] as const)('activates %s in the background and publishes tools after discovery', async (transport) => {
+    const connection: PromiseWithResolvers<void> = Promise.withResolvers()
+    mockConnect.mockImplementation(() => connection.promise)
+    const config = ConfigSchema(transport === 'stdio'
+      ? { transport, serverName: 'srv', command: 'echo', startupMode: 'background' }
+      : { transport, serverName: 'srv', url: 'http://localhost/mcp', startupMode: 'background' })
+    const fiber = ctx.plugin({ name: 'mcp-background', inject, apply }, config)
+    let activated = false
+    const activation = Promise.resolve(fiber).then(() => { activated = true })
+    try {
+      await vi.waitFor(() => { expect(activated).toBe(true) })
+      expect(mockConnect).toHaveBeenCalledTimes(1)
+      expect(mockListTools).not.toHaveBeenCalled()
+      expect(ctx.tools.get('mcp__srv__remote')).toBeUndefined()
+      connection.resolve()
+      await vi.waitFor(() => { expect(ctx.tools.get('mcp__srv__remote')).toBeDefined() })
+      await fiber.dispose()
+      expect(ctx.tools.get('mcp__srv__remote')).toBeUndefined()
+      expect(mockClose).toHaveBeenCalledTimes(1)
+    } finally {
+      connection.resolve()
+      await activation
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('rejects background startup combined with fatal startup errors before connecting', async () => {
+    try {
+      await expect(apply(ctx, {
+        ...stdioConfig, startupMode: 'background', failOnStartupError: true,
+      })).rejects.toThrow('startupMode "background" requires failOnStartupError: false')
+      expect(mockConnect).not.toHaveBeenCalled()
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it.each(['blocking', 'background'] as const)('closes the transport when its %s owner unloads during initial connection', async (startupMode) => {
     const connecting: PromiseWithResolvers<void> = Promise.withResolvers()
     mockConnect.mockImplementation(() => connecting.promise)
     mockClose.mockImplementation(function (this: { onclose?: () => void }) {
@@ -226,7 +264,7 @@ describe('apply (plugin lifecycle)', () => {
       connecting.resolve()
       return Promise.resolve()
     })
-    const fiber = ctx.plugin({ name: 'mcp-pending-startup', inject, apply }, { ...stdioConfig, reconnect: { enabled: false } })
+    const fiber = ctx.plugin({ name: 'mcp-pending-startup', inject, apply }, { ...stdioConfig, startupMode, reconnect: { enabled: false } })
     const activation = Promise.resolve(fiber).catch((error: unknown) => error)
     try {
       await vi.waitFor(() => { expect(mockConnect).toHaveBeenCalledTimes(1) })

@@ -33,6 +33,6 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
   }
   const result = request.method === 'initialize'
     ? { protocolVersion: request.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1' } }
-    : { tools: [] }
+    : { tools: [{ name: 'ping', description: 'Fixture ping.', inputSchema: { type: 'object' } }] }
   process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id: request.id, result })}\n`)
 })

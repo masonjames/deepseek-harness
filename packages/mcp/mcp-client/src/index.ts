@@ -70,6 +70,8 @@ export interface StdioConfig {
   toolCallTimeoutMs: number
   /** Fail plugin activation when the initial connection or tool synchronization fails. */
   failOnStartupError: boolean
+  /** Initial discovery blocks activation by default; background requires failOnStartupError: false. */
+  startupMode?: 'blocking' | 'background'
   /** Maximum UTF-8 bytes of attributed server instructions (default 32768). */
   maxInstructionBytes?: number
   /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
@@ -94,6 +96,8 @@ export interface StreamableHttpConfig {
   toolCallTimeoutMs: number
   /** Fail plugin activation when the initial connection or tool synchronization fails. */
   failOnStartupError: boolean
+  /** Initial discovery blocks activation by default; background requires failOnStartupError: false. */
+  startupMode?: 'blocking' | 'background'
   /** Maximum UTF-8 bytes of attributed server instructions (default 32768). */
   maxInstructionBytes?: number
   /** Automatic reconnect policy after a lost connection; omission uses the defaults. */
@@ -126,6 +130,7 @@ export const Config = z.union([
     cwd: z.string().default(''),
     toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
     failOnStartupError: z.boolean().default(false),
+    startupMode: z.union(['blocking', 'background']).default('blocking'),
     maxInstructionBytes: z.number().step(1).min(1).default(DEFAULT_MAX_INSTRUCTION_BYTES),
     reconnect: Reconnect,
   }),
@@ -136,6 +141,7 @@ export const Config = z.union([
     headers: z.dict(String).default({}),
     toolCallTimeoutMs: z.number().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
     failOnStartupError: z.boolean().default(false),
+    startupMode: z.union(['blocking', 'background']).default('blocking'),
     maxInstructionBytes: z.number().step(1).min(1).default(DEFAULT_MAX_INSTRUCTION_BYTES),
     reconnect: Reconnect,
   }),
@@ -144,14 +150,17 @@ export const Config = z.union([
 // ---- Plugin apply ----
 
 /**
- * Connect one MCP server and publish its initial tool generation before activation.
+ * Connect one MCP server, optionally discovering its tools after activation.
  * This entry remains explicitly `async`: Cordis treats a prototype-bearing
  * ordinary function as a constructor, whose returned Promise is not startup work.
  * @param ctx - plugin context carrying the tool registry.
  * @param config - resolved transport and server namespace configuration.
- * @returns startup readiness after connection and initial tool discovery settle.
+ * @returns activation after discovery settles, or after supervision starts in background mode.
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
+  if (config.startupMode === 'background' && config.failOnStartupError) {
+    throw new Error(`mcp-client(${config.serverName}): startupMode "background" requires failOnStartupError: false`)
+  }
   // Fail loud at load: reconnect misconfiguration (including programmatic
   // construction that bypassed Schemastery) rejects THIS instance before any
   // effect registers.
@@ -190,6 +199,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     return dispose()
   }, { global: true })
   ctx.effect(() => dispose, 'mcp-client.connection')
+
+  // The supervisor owns failure logging, retries, and teardown even when
+  // activation does not wait for its non-rejecting readiness promise.
+  if (config.startupMode === 'background') return
 
   // Block plugin activation on the initial connection + tool discovery so
   // Cordis consumers observe the tools immediately after the fiber activates.
